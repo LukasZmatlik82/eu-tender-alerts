@@ -1,0 +1,136 @@
+{
+  "name": "Daily EU public tender alerts by email (TED)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Daily EU tender alerts\nEvery morning this workflow searches TED (the EU tender journal) with **EU Tender Monitor** on Apify and emails you only **new** tenders that match your keywords, CPV codes and countries.\n\n### Setup (5 minutes)\n1. Create a free Apify account and copy your API token (Console → Settings → API & Integrations).\n2. In **Find new tenders on TED**, create a *Header Auth* credential: name `Authorization`, value `Bearer YOUR_APIFY_TOKEN`.\n3. Edit the JSON body: keywords, CPV codes, countries. Examples: https://apify.com/cognitive_advisory/eu-tender-monitor\n4. In **Send email**, set your SMTP credential and the To address.\n5. Activate the workflow.\n\nYou pay Apify per tender found (about $0.003). Days without new tenders send no email.",
+        "height": 520,
+        "width": 420
+      },
+      "id": "a3b0f4e2-1c55-4b8e-9e51-6f1d2a7c0001",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "id": "a3b0f4e2-1c55-4b8e-9e51-6f1d2a7c0002",
+      "name": "Every day at 7:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/cognitive_advisory~eu-tender-monitor/run-sync-get-dataset-items?timeout=280",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"keywords\": [\n    \"ERP\",\n    \"SAP\"\n  ],\n  \"cpvCodes\": [\n    \"48000000\",\n    \"72000000\"\n  ],\n  \"countries\": [\n    \"DE\",\n    \"AT\",\n    \"CZ\",\n    \"SK\",\n    \"PL\"\n  ],\n  \"noticeTypes\": [\n    \"tenders\"\n  ],\n  \"publishedWithinDays\": 3,\n  \"onlyOpen\": true,\n  \"onlyVerifiedMatches\": true,\n  \"onlyNewNotices\": true,\n  \"titleLanguage\": \"en\",\n  \"maxResults\": 100\n}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "a3b0f4e2-1c55-4b8e-9e51-6f1d2a7c0003",
+      "name": "Find new tenders on TED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// n8n Code node (\"Run Once for All Items\"): turns EU Tender Monitor results into one HTML email.\n// The same code is embedded in eu-tender-alerts-email.json; keep both in sync.\nconst esc = (s) =>\n    String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[c]);\nconst eur = (v) => (v == null ? '–' : `€${Math.round(v).toLocaleString('en-US')}`);\nconst day = (iso) => (iso ? new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '–');\n\nconst tenders = $input\n    .all()\n    .map((i) => i.json)\n    .filter((t) => t.noticeId)\n    .sort((a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0));\nif (!tenders.length) return [];\n\nconst rows = tenders\n    .map(\n        (t) => `<tr>\n  <td style=\"padding:10px 8px;border-bottom:1px solid #e4e3df;vertical-align:top\">\n    <a href=\"${esc(t.noticeUrl)}\" style=\"color:#1c5cab;font-weight:600;text-decoration:none\">${esc(t.title)}</a><br>\n    <span style=\"color:#52514e\">${esc(t.buyerName)} · ${esc(t.buyerCountry)}</span><br>\n    <span style=\"color:#52514e;font-size:13px\">${esc((t.reasons ?? []).slice(0, 2).join(' '))}</span>\n  </td>\n  <td style=\"padding:10px 8px;border-bottom:1px solid #e4e3df;vertical-align:top;white-space:nowrap\">${day(t.deadline)}${t.daysToDeadline != null ? `<br><span style=\"color:#52514e;font-size:13px\">${t.daysToDeadline} days</span>` : ''}</td>\n  <td style=\"padding:10px 8px;border-bottom:1px solid #e4e3df;vertical-align:top;white-space:nowrap;text-align:right\">${eur(t.estimatedValueEur)}</td>\n</tr>`,\n    )\n    .join('\\n');\n\nconst html = `<div style=\"font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#0b0b0b;max-width:760px\">\n<p>${tenders.length} new tender${tenders.length === 1 ? '' : 's'} on TED match your search.</p>\n<table style=\"border-collapse:collapse;width:100%\">\n<tr><th align=\"left\" style=\"padding:6px 8px;border-bottom:2px solid #0b0b0b\">Tender</th><th align=\"left\" style=\"padding:6px 8px;border-bottom:2px solid #0b0b0b\">Deadline</th><th align=\"right\" style=\"padding:6px 8px;border-bottom:2px solid #0b0b0b\">Value</th></tr>\n${rows}\n</table>\n<p style=\"color:#52514e;font-size:12px\">Source: TED (Publications Office of the EU) via EU Tender Monitor on Apify. Always check the official notice before you bid.</p>\n</div>`;\n\nreturn [{ json: { subject: `${tenders.length} new EU tender${tenders.length === 1 ? '' : 's'} for you`, html, count: tenders.length } }];\n"
+      },
+      "id": "a3b0f4e2-1c55-4b8e-9e51-6f1d2a7c0004",
+      "name": "Build email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "alerts@example.com",
+        "toEmail": "you@example.com",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "a3b0f4e2-1c55-4b8e-9e51-6f1d2a7c0005",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 7:00": {
+      "main": [
+        [
+          {
+            "node": "Find new tenders on TED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find new tenders on TED": {
+      "main": [
+        [
+          {
+            "node": "Build email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build email": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
